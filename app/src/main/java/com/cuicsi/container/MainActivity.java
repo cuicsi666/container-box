@@ -32,7 +32,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView envAlpine, envUdocker, envDisk, envState;
     private TextView svcBadge, svcInfo;
     private Button btnStart, btnStop, btnOpen, btnLog;
-    private TextView containersText, imagesText;
+    private TextView containersText, imagesText, torrentsText;
     private boolean running = false;
     private boolean busy = false;
 
@@ -67,6 +67,10 @@ public class MainActivity extends AppCompatActivity {
 
         // 服务卡（qBittorrent）
         content.addView(serviceCard());
+
+        // 下载任务
+        content.addView(sectionTitle("下载任务"));
+        content.addView(torrentsCard());
 
         // 容器
         content.addView(sectionTitle("容器（udocker）"));
@@ -207,6 +211,13 @@ public class MainActivity extends AppCompatActivity {
         return card;
     }
 
+    private View torrentsCard() {
+        LinearLayout card = card();
+        torrentsText = mono("加载中…");
+        card.addView(torrentsText);
+        return card;
+    }
+
     private View containersCard() {
         LinearLayout card = card();
         containersText = mono("加载中…");
@@ -273,6 +284,15 @@ public class MainActivity extends AppCompatActivity {
             // 3) 磁盘
             String disk = Runner.sh("du -sh /data/local/udk 2>/dev/null | cut -f1", 30);
 
+            // 4) qB 下载任务
+            String qbJson = "";
+            if (run) {
+                qbJson = Runner.sh("curl -s -c /data/local/tmp/qc -d 'username=admin&password=cuicsi2026' "
+                        + "http://127.0.0.1:8080/api/v2/auth/login >/dev/null 2>&1; "
+                        + "curl -s -b /data/local/tmp/qc http://127.0.0.1:8080/api/v2/torrents/info", 30);
+            }
+            final String qbFinal = qbJson;
+
             ui.post(() -> {
                 busy = false;
                 running = run;
@@ -284,6 +304,7 @@ public class MainActivity extends AppCompatActivity {
                 envState.setTextColor(all.contains("执行失败") ? RED : ACCENT);
 
                 updateServiceUI();
+                torrentsText.setText(formatTorrents(qbFinal, run));
                 containersText.setText(orNone(pick(all, "@@PS@@", "@@IMG@@")));
                 imagesText.setText(orNone(pick(all, "@@IMG@@", null)));
             });
@@ -366,6 +387,33 @@ public class MainActivity extends AppCompatActivity {
         int j = end == null ? all.length() : all.indexOf(end, i);
         if (j < 0) j = all.length();
         return all.substring(i, j).trim();
+    }
+
+    private String formatTorrents(String json, boolean svcRunning) {
+        if (!svcRunning) return "服务未运行";
+        if (json == null || json.trim().isEmpty()) return "读取失败";
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            if (arr.length() == 0) return "暂无下载任务";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length() && i < 5; i++) {
+                org.json.JSONObject o = arr.getJSONObject(i);
+                String name = o.optString("name", "?");
+                double prog = o.optDouble("progress", 0) * 100;
+                long size = o.optLong("size", 0);
+                long done = o.optLong("completed", 0);
+                long dl = o.optLong("dlspeed", 0);
+                long eta = o.optLong("eta", 0);
+                sb.append(name).append("\n");
+                sb.append(String.format(java.util.Locale.US, "%.1f%%  ·  %.0f / %.0f MB%n", prog, done / 1048576.0, size / 1048576.0));
+                String etaStr = eta > 0 ? (eta > 3600 ? (eta / 3600) + "h " + ((eta % 3600) / 60) + "m" : (eta / 60) + "m") : "已完成";
+                sb.append(String.format(java.util.Locale.US, "↓ %.1f KB/s  ·  剩余 %s", dl / 1024.0, etaStr));
+                if (i < arr.length() - 1) sb.append("\n\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "解析失败";
+        }
     }
 
     private String orNone(String s) { return s == null || s.trim().isEmpty() ? "（暂无）" : s.trim(); }
